@@ -1,0 +1,53 @@
+{
+  "name": "account-validation-service",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "account-validation-service/src",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "mvn package -DskipTests",
+        "cwd": "{workspaceRoot}/account-validation-service"
+      },
+      "outputs": ["{workspaceRoot}/account-validation-service/target"]
+    },
+    "build-with-tests": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "mvn package",
+        "cwd": "{workspaceRoot}/account-validation-service"
+      },
+      "outputs": ["{workspaceRoot}/account-validation-service/target"]
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "mvn test",
+        "cwd": "{workspaceRoot}/account-validation-service"
+      }
+    },
+    "serve": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "mvn spring-boot:run",
+        "cwd": "{workspaceRoot}/account-validation-service"
+      }
+    },
+    "clean": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "mvn clean",
+        "cwd": "{workspaceRoot}/account-validation-service"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "mvn checkstyle:check",
+        "cwd": "{workspaceRoot}/account-validation-service"
+      }
+    }
+  },
+  "tags": ["scope:downstream", "type:service"]
+}

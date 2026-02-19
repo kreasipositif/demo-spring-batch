@@ -15,7 +15,7 @@
 
     <modules>
         <module>config-service</module>
-        <!-- account-validation-service: add when project is created -->
+        <module>account-validation-service</module>
         <!-- batch-processor: add when project is created -->
     </modules>
 

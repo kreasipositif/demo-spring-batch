@@ -1,0 +1,101 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: account-validation-service
+  threads:
+    virtual:
+      enabled: true
+
+# ─── CORS ────────────────────────────────────────────────────────────────────────
+cors:
+  allowed-origins:
+    - "*"
+
+# ─── Simulated Latency ───────────────────────────────────────────────────────────
+# Mimics downstream bank API response time. Set to 0 to disable for tests.
+mock:
+  latency-ms: 500
+
+  # ─── Seeded Mock Accounts ──────────────────────────────────────────────────────
+  # Each entry represents a known valid account in the mock "bank core system".
+  # account-number must be unique. status: ACTIVE | INACTIVE | BLOCKED
+  accounts:
+    - account-number: "1234567890"
+      account-name: "Budi Santoso"
+      bank-code: "BCA"
+      status: "ACTIVE"
+    - account-number: "0987654321"
+      account-name: "Siti Rahayu"
+      bank-code: "BNI"
+      status: "ACTIVE"
+    - account-number: "1122334455"
+      account-name: "Ahmad Fauzi"
+      bank-code: "BRI"
+      status: "ACTIVE"
+    - account-number: "5544332211"
+      account-name: "Dewi Lestari"
+      bank-code: "MANDIRI"
+      status: "ACTIVE"
+    - account-number: "6677889900"
+      account-name: "Rudi Hermawan"
+      bank-code: "CIMB"
+      status: "INACTIVE"
+    - account-number: "9900112233"
+      account-name: "Rina Kusuma"
+      bank-code: "DANAMON"
+      status: "ACTIVE"
+    - account-number: "3344556677"
+      account-name: "Hendra Gunawan"
+      bank-code: "PERMATA"
+      status: "BLOCKED"
+    - account-number: "7788990011"
+      account-name: "Yuni Astuti"
+      bank-code: "BTN"
+      status: "ACTIVE"
+    - account-number: "2233445566"
+      account-name: "Fajar Nugroho"
+      bank-code: "BSI"
+      status: "ACTIVE"
+    - account-number: "4455667788"
+      account-name: "Indah Permata"
+      bank-code: "OCBC"
+      status: "ACTIVE"
+    - account-number: "1357924680"
+      account-name: "Wahyu Prasetyo"
+      bank-code: "BCA"
+      status: "ACTIVE"
+    - account-number: "2468013579"
+      account-name: "Maya Sari"
+      bank-code: "BRI"
+      status: "ACTIVE"
+    - account-number: "1111222233"
+      account-name: "Doni Kurniawan"
+      bank-code: "MANDIRI"
+      status: "ACTIVE"
+    - account-number: "4444555566"
+      account-name: "Lina Marlina"
+      bank-code: "BNI"
+      status: "INACTIVE"
+    - account-number: "7777888899"
+      account-name: "Agus Salim"
+      bank-code: "BSI"
+      status: "ACTIVE"
+
+# ─── Actuator ───────────────────────────────────────────────────────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+# ─── SpringDoc ───────────────────────────────────────────────────────────────────
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
