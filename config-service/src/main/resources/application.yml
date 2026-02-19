@@ -1,0 +1,77 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: config-service
+  threads:
+    virtual:
+      enabled: true
+
+# --- CORS ----------------------------------------------------------------------------
+cors:
+  # Comma-separated list of allowed origins.
+  # Use '*' for local dev; restrict to specific origins in production.
+  allowed-origins:
+    - "*"
+
+# --- Bank Code Configuration ------------------------------------------------------------------
+bank-config:
+  valid-bank-codes:
+    - code: "BCA"
+      name: "Bank Central Asia"
+    - code: "BNI"
+      name: "Bank Negara Indonesia"
+    - code: "BRI"
+      name: "Bank Rakyat Indonesia"
+    - code: "MANDIRI"
+      name: "Bank Mandiri"
+    - code: "CIMB"
+      name: "CIMB Niaga"
+    - code: "DANAMON"
+      name: "Bank Danamon"
+    - code: "PERMATA"
+      name: "Bank Permata"
+    - code: "BTN"
+      name: "Bank Tabungan Negara"
+    - code: "BSI"
+      name: "Bank Syariah Indonesia"
+    - code: "OCBC"
+      name: "OCBC Indonesia"
+
+# --- Transaction Limit Configuration ------------------------------------------------------------------
+transaction-config:
+  limits:
+    - transaction-type: "TRANSFER"
+      min-amount: 10000
+      max-amount: 1000000000
+      currency: "IDR"
+    - transaction-type: "PAYMENT"
+      min-amount: 1000
+      max-amount: 500000000
+      currency: "IDR"
+    - transaction-type: "TOPUP"
+      min-amount: 10000
+      max-amount: 50000000
+      currency: "IDR"
+    - transaction-type: "WITHDRAWAL"
+      min-amount: 50000
+      max-amount: 20000000
+      currency: "IDR"
+
+# --- Actuator ----------------------------------------------------------------------------
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+# --- SpringDoc ----------------------------------------------------------------------------
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html

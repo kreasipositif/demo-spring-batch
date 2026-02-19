@@ -1,0 +1,53 @@
+{
+  "name": "config-service",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "config-service/src",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "mvn package -DskipTests",
+        "cwd": "{workspaceRoot}/config-service"
+      },
+      "outputs": ["{workspaceRoot}/config-service/target"]
+    },
+    "build-with-tests": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "mvn package",
+        "cwd": "{workspaceRoot}/config-service"
+      },
+      "outputs": ["{workspaceRoot}/config-service/target"]
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "mvn test",
+        "cwd": "{workspaceRoot}/config-service"
+      }
+    },
+    "serve": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "mvn spring-boot:run",
+        "cwd": "{workspaceRoot}/config-service"
+      }
+    },
+    "clean": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "mvn clean",
+        "cwd": "{workspaceRoot}/config-service"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "mvn checkstyle:check",
+        "cwd": "{workspaceRoot}/config-service"
+      }
+    }
+  },
+  "tags": ["scope:config", "type:service"]
+}
