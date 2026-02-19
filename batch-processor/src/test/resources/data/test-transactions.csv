@@ -1,0 +1,6 @@
+Reference ID,Source Account,Source Account Name,Source Bank Code,Beneficiary Account,Beneficiary Account Name,Beneficiary Bank Code,Currency,Amount,Transaction Type,Note
+TRX-T001,1111111111,Alice Tan,BCA,2222222222,Bob Lee,MANDIRI,IDR,500000,DOMESTIC_TRANSFER,Test transfer 1
+TRX-T002,3333333333,Carol Kim,BNI,4444444444,David Wong,BCA,IDR,750000,DOMESTIC_TRANSFER,Test transfer 2
+TRX-T003,5555555555,Eve Santos,MANDIRI,6666666666,Frank Liu,CIMB,IDR,1000000,DOMESTIC_TRANSFER,Test transfer 3
+TRX-T004,UNKNOWN_ACC,Ghost User,INVALID_BANK,9999999999,Target User,BCA,IDR,200000,DOMESTIC_TRANSFER,Should fail - invalid bank code and account
+TRX-T005,7777777777,Valid User,BCA,UNKNOWN_ACC,Missing User,MANDIRI,IDR,300000,DOMESTIC_TRANSFER,Should fail - invalid beneficiary account

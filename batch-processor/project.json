@@ -1,0 +1,39 @@
+{
+  "name": "batch-processor",
+  "sourceRoot": "batch-processor/src",
+  "projectType": "application",
+  "tags": ["java", "spring-batch"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "mvn clean package -DskipTests",
+        "cwd": "{workspaceRoot}/batch-processor"
+      },
+      "outputs": ["{workspaceRoot}/batch-processor/target"],
+      "cache": true
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "mvn test",
+        "cwd": "{workspaceRoot}/batch-processor"
+      },
+      "cache": false
+    },
+    "serve": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "mvn spring-boot:run",
+        "cwd": "{workspaceRoot}/batch-processor"
+      }
+    },
+    "clean": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "mvn clean",
+        "cwd": "{workspaceRoot}/batch-processor"
+      }
+    }
+  }
+}

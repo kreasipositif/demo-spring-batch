@@ -1,0 +1,96 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: batch-processor
+  threads:
+    virtual:
+      enabled: true
+
+  # ─── Spring Batch ─────────────────────────────────────────────────────────────
+  batch:
+    job:
+      enabled: false        # Do NOT run jobs on startup; jobs are triggered via REST
+    jdbc:
+      initialize-schema: always
+
+  # ─── H2 datasource for Spring Batch metadata ─────────────────────────────────
+  datasource:
+    url: jdbc:h2:mem:batchdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+# ─── CORS ─────────────────────────────────────────────────────────────────────
+cors:
+  allowed-origins:
+    - "*"
+
+# ─── Batch Processing Configuration ──────────────────────────────────────────
+batch:
+  # Number of CSV records per chunk (reader → processor → writer cycle)
+  chunk-size: 100
+  # Number of partitions (workers). Each worker runs on its own virtual thread.
+  grid-size: 10
+  # Path to the input CSV file (can be overridden at job launch via jobParameters)
+  input-file: classpath:data/transactions.csv
+  # Path to the output validation result file
+  output-file: ${java.io.tmpdir}/batch-output/validation-results.csv
+
+# ─── Downstream Service URLs ─────────────────────────────────────────────────
+downstream:
+  config-service:
+    base-url: http://localhost:8081
+  account-validation-service:
+    base-url: http://localhost:8082
+
+# ─── Resilience4j Bulkheads ──────────────────────────────────────────────────
+resilience4j:
+  bulkhead:
+    instances:
+      # SemaphoreBulkhead: limits concurrent calls to config-service
+      configServiceBulkhead:
+        max-concurrent-calls: 20
+        max-wait-duration: 500ms
+      # SemaphoreBulkhead: limits concurrent calls to account-validation-service
+      accountValidationBulkhead:
+        max-concurrent-calls: 20
+        max-wait-duration: 500ms
+
+  thread-pool-bulkhead:
+    instances:
+      # FixedThreadPoolBulkhead: limits queued async calls to account-validation-service
+      accountValidationThreadPoolBulkhead:
+        max-thread-pool-size: 20
+        core-thread-pool-size: 10
+        queue-capacity: 200
+        keep-alive-duration: 20ms
+
+# ─── Actuator ─────────────────────────────────────────────────────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,batches
+  endpoint:
+    health:
+      show-details: always
+
+# ─── SpringDoc ────────────────────────────────────────────────────────────────
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+# ─── Logging ──────────────────────────────────────────────────────────────────
+logging:
+  level:
+    com.kreasipositif: DEBUG
+    org.springframework.batch: INFO
+    io.github.resilience4j: INFO
