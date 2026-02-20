@@ -170,6 +170,7 @@ public class BatchConfig {
                 .reader(workerItemReader(null, 0, 0))   // placeholders — overridden by @StepScope
                 .processor(itemProcessor)
                 .writer(workerItemWriter(0))             // step-scoped writer
+                .allowStartIfComplete(true)              // allow restart: re-run partitions that finished before the stop
                 .build();
     }
 

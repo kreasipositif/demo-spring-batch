@@ -7,6 +7,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.Job;
 import org.springframework.batch.core.JobExecution;
 import org.springframework.batch.core.JobParameters;
@@ -14,6 +15,7 @@ import org.springframework.batch.core.JobParametersBuilder;
 import org.springframework.batch.core.StepExecution;
 import org.springframework.batch.core.explore.JobExplorer;
 import org.springframework.batch.core.launch.JobLauncher;
+import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
@@ -24,6 +26,7 @@ import java.time.LocalDateTime;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -38,16 +41,19 @@ public class JobController {
     private final JobLauncher asyncJobLauncher;
     private final Job transactionValidationJob;
     private final JobExplorer jobExplorer;
+    private final JobOperator jobOperator;
 
     @Value("${batch.input-file:classpath:data/transactions.csv}")
     private String defaultInputFile;
 
     public JobController(@Qualifier("asyncJobLauncher") JobLauncher asyncJobLauncher,
                          Job transactionValidationJob,
-                         JobExplorer jobExplorer) {
+                         JobExplorer jobExplorer,
+                         JobOperator jobOperator) {
         this.asyncJobLauncher = asyncJobLauncher;
         this.transactionValidationJob = transactionValidationJob;
         this.jobExplorer = jobExplorer;
+        this.jobOperator = jobOperator;
     }
 
     // ─── POST /api/v1/batch/start ─────────────────────────────────────────────
@@ -189,6 +195,110 @@ public class JobController {
         }
     }
 
+    // ─── POST /api/v1/batch/{jobExecutionId}/stop ────────────────────────────
+
+    @PostMapping("/{jobExecutionId}/stop")
+    @Operation(
+            summary = "Pause (stop) a running job",
+            description = """
+                    Signals the job to stop **after the current chunk finishes**.
+                    The job transitions to `STOPPING` and then `STOPPED`.
+                    Spring Batch commits the offset of the last completed chunk
+                    in `BATCH_STEP_EXECUTION`, so a subsequent `/resume` call
+                    will pick up from exactly that point.
+
+                    Returns `409 Conflict` if the job is not currently running.
+                    """,
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "Stop signal sent — job will finish its current chunk then halt"),
+                    @ApiResponse(responseCode = "404", description = "Job execution not found"),
+                    @ApiResponse(responseCode = "409", description = "Job is not in a stoppable state (already stopped or completed)")
+            })
+    public ResponseEntity<?> stopJob(
+            @Parameter(description = "Job execution ID to stop", required = true)
+            @PathVariable("jobExecutionId") Long jobExecutionId) {
+
+        JobExecution execution = jobExplorer.getJobExecution(jobExecutionId);
+        if (execution == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        Set<BatchStatus> stoppable = Set.of(BatchStatus.STARTED, BatchStatus.STARTING);
+        if (!stoppable.contains(execution.getStatus())) {
+            return ResponseEntity.status(409).body(Map.of(
+                    "error", "Job is not running",
+                    "currentStatus", execution.getStatus().name(),
+                    "hint", "Only STARTED or STARTING jobs can be stopped"));
+        }
+
+        try {
+            boolean stopped = jobOperator.stop(jobExecutionId);
+            log.info("Stop signal sent for jobExecutionId={}, acknowledged={}", jobExecutionId, stopped);
+            return ResponseEntity.ok(Map.of(
+                    "jobExecutionId", jobExecutionId,
+                    "message", "Stop signal sent — job will halt after the current chunk completes",
+                    "previousStatus", execution.getStatus().name(),
+                    "expectedStatus", "STOPPED"));
+        } catch (Exception e) {
+            log.error("Failed to stop jobExecutionId={}: {}", jobExecutionId, e.getMessage(), e);
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", "Failed to stop job: " + e.getMessage()));
+        }
+    }
+
+    // ─── POST /api/v1/batch/{jobExecutionId}/resume ──────────────────────────
+
+    @PostMapping("/{jobExecutionId}/resume")
+    @Operation(
+            summary = "Resume a stopped job",
+            description = """
+                    Restarts a `STOPPED` (or `FAILED`) job execution from its last committed
+                    chunk offset. Spring Batch creates a **new `JobExecution`** linked to the
+                    same `JobInstance`, skipping any partitions that had already `COMPLETED`
+                    and resuming incomplete ones from where they left off.
+
+                    Returns the **new** `jobExecutionId` to poll for progress.
+
+                    Returns `409 Conflict` if the job is not in a restartable state.
+                    """,
+            responses = {
+                    @ApiResponse(responseCode = "202", description = "Job restarted — new jobExecutionId returned",
+                            content = @Content(schema = @Schema(implementation = JobResumeResponse.class))),
+                    @ApiResponse(responseCode = "404", description = "Job execution not found"),
+                    @ApiResponse(responseCode = "409", description = "Job is not in a restartable state")
+            })
+    public ResponseEntity<?> resumeJob(
+            @Parameter(description = "Job execution ID of the STOPPED or FAILED job to resume", required = true)
+            @PathVariable("jobExecutionId") Long jobExecutionId) {
+
+        JobExecution execution = jobExplorer.getJobExecution(jobExecutionId);
+        if (execution == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        Set<BatchStatus> restartable = Set.of(BatchStatus.STOPPED, BatchStatus.FAILED);
+        if (!restartable.contains(execution.getStatus())) {
+            return ResponseEntity.status(409).body(Map.of(
+                    "error", "Job cannot be resumed",
+                    "currentStatus", execution.getStatus().name(),
+                    "hint", "Only STOPPED or FAILED jobs can be resumed"));
+        }
+
+        try {
+            Long newJobExecutionId = jobOperator.restart(jobExecutionId);
+            log.info("Resumed jobExecutionId={} → new jobExecutionId={}", jobExecutionId, newJobExecutionId);
+            return ResponseEntity.accepted().body(new JobResumeResponse(
+                    jobExecutionId,
+                    newJobExecutionId,
+                    "STARTING",
+                    "Job resumed — poll /api/v1/batch/status/" + newJobExecutionId + " for progress"));
+        } catch (Exception e) {
+            log.error("Failed to resume jobExecutionId={}: {}", jobExecutionId, e.getMessage(), e);
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", "Failed to resume job: " + e.getMessage()));
+        }
+    }
+
     // ─── Response records ─────────────────────────────────────────────────────
 
     public record JobStartResponse(Long jobExecutionId, String status, String inputFile, String startTime) {}
@@ -242,4 +352,18 @@ public class JobController {
             long filterCount,
             String startTime,
             String endTime) {}
+
+    /**
+     * Response for a successful resume (restart) operation.
+     *
+     * @param previousJobExecutionId The STOPPED/FAILED execution that was restarted
+     * @param newJobExecutionId      The new execution to poll for progress
+     * @param status                 Initial status of the new execution
+     * @param message                Human-readable guidance
+     */
+    public record JobResumeResponse(
+            Long previousJobExecutionId,
+            Long newJobExecutionId,
+            String status,
+            String message) {}
 }
