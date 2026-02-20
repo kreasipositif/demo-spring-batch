@@ -18,6 +18,12 @@ A multi-service **Nx monorepo** that simulates a high-throughput bank transactio
   - [Step 3 — Trigger the Batch Job](#step-3--trigger-the-batch-job)
   - [Step 4 — Check the Job Status](#step-4--check-the-job-status)
   - [Step 5 — Inspect the Output Files](#step-5--inspect-the-output-files)
+- [Stop & Resume a Running Job](#stop--resume-a-running-job)
+  - [How it works](#how-it-works)
+  - [Stop a job](#stop-a-job)
+  - [Resume a stopped job](#resume-a-stopped-job)
+  - [Status flow](#status-flow)
+  - [Important notes](#important-notes)
 - [Checking Results](#checking-results)
   - [Via REST API](#via-rest-api)
   - [Via Output CSV Files](#via-output-csv-files)
@@ -138,6 +144,8 @@ The main service. Reads a large CSV file of transactions, validates each record 
 |---|---|
 | `POST /api/v1/batch/start?inputFile=` | Trigger a job (optional `inputFile` path override) |
 | `GET /api/v1/batch/status/{jobExecutionId}` | Get job status + per-partition step summaries |
+| `POST /api/v1/batch/stop/{jobExecutionId}` | Gracefully stop a running job after the current chunk |
+| `POST /api/v1/batch/resume/{jobExecutionId}` | Resume a stopped job from the last committed checkpoint |
 | `GET /swagger-ui.html` | Interactive API docs |
 | `GET /h2-console` | H2 in-memory DB console (Spring Batch metadata) |
 | `GET /actuator/health` | Health check |
@@ -338,11 +346,124 @@ find $TMPDIR/batch-output -name "*.csv" | sort
 
 ---
 
+## Stop & Resume a Running Job
+
+Spring Batch does not have a native "pause" concept, but it provides a **graceful stop + restart** mechanism. A running job can be signalled to stop after it finishes its current chunk, then later restarted from exactly where it left off.
+
+### How it works
+
+```
+POST /stop/{id}
+      │
+      ▼  Spring Batch sets a stop flag in BATCH_JOB_EXECUTION
+      │
+      ▼  current chunk finishes writing (no partial chunks are lost)
+      │
+      ▼  job transitions:  STARTED → STOPPING → STOPPED
+      │
+      ▼  checkpoint is recorded in BATCH_STEP_EXECUTION (read/write counts preserved)
+
+POST /resume/{id}
+      │
+      ▼  Spring Batch creates a NEW JobExecution with a new ID
+      │
+      ▼  steps already COMPLETED are skipped (allowStartIfComplete = true)
+      │
+      ▼  stopped/incomplete steps resume from their last committed chunk offset
+      │
+      ▼  new job transitions:  STARTING → STARTED → ... → COMPLETED
+```
+
+The key guarantee: **no data is processed twice and no data is lost** — Spring Batch's chunk commit mechanism ensures the restart picks up exactly at the first uncommitted record.
+
+---
+
+### Stop a job
+
+```bash
+# Replace 1 with the jobExecutionId returned by /start
+curl -X POST http://localhost:8083/api/v1/batch/stop/1
+```
+
+**Example response (202 Accepted):**
+```json
+{
+  "jobExecutionId": 1,
+  "stopped": true,
+  "message": "Stop signal sent. Job will stop after current chunk completes."
+}
+```
+
+> `"stopped": false` means the job had already finished or was not in a stoppable state.
+
+The job does **not** stop instantly — it finishes writing the current chunk first (up to `chunk-size` records, default 100). Poll `GET /status/1` and wait for `"status": "STOPPED"` before resuming.
+
+```bash
+# Wait for the job to reach STOPPED status
+curl http://localhost:8083/api/v1/batch/status/1
+```
+
+---
+
+### Resume a stopped job
+
+```bash
+# Pass the STOPPED job's execution ID
+curl -X POST http://localhost:8083/api/v1/batch/resume/1
+```
+
+**Example response (202 Accepted):**
+```json
+{
+  "previousJobExecutionId": 1,
+  "newJobExecutionId": 2,
+  "status": "STARTING",
+  "message": "Job restarted. New execution ID: 2"
+}
+```
+
+> A resume creates a **new** `JobExecution` with a new ID. Track its progress using the new ID:
+
+```bash
+curl http://localhost:8083/api/v1/batch/status/2
+```
+
+---
+
+### Status flow
+
+```
+start ──► STARTED ──► STOPPING ──► STOPPED
+                                       │
+                              resume ──┘
+                                       │
+                                       ▼
+                                   STARTING ──► STARTED ──► COMPLETED
+```
+
+| Status | Meaning |
+|---|---|
+| `STARTED` | Job is actively running |
+| `STOPPING` | Stop signal received; waiting for current chunk to finish |
+| `STOPPED` | Job has stopped cleanly at a chunk boundary; safe to resume |
+| `COMPLETED` | Job finished all records successfully |
+| `FAILED` | Job encountered an unhandled exception |
+
+---
+
+### Important notes
+
+| Note | Detail |
+|---|---|
+| **Only `STOPPED` or `FAILED` jobs can be resumed** | Calling resume on a `COMPLETED` or `STARTED` job returns a 409 Conflict |
+| **Output files from the stopped run are kept** | The resumed run appends new output files (new timestamp); it does not overwrite previous files |
+| **Chunk size controls granularity** | With `chunk-size=100`, at most 99 records may be re-read after a stop (Spring Batch re-reads the uncommitted chunk) |
+| **Partitions that completed before the stop are skipped** | `allowStartIfComplete(true)` on `workerStep` means only incomplete partitions are re-executed |
+| **Same `inputFile` is used automatically** | The original job parameters (including `inputFile`) are carried over to the restarted execution |
+
+---
+
 ## Checking Results
-
-### Via REST API
-
-**Check if the job completed successfully:**
 ```bash
 curl -s http://localhost:8083/api/v1/batch/status/1 | python3 -m json.tool
 ```
@@ -669,5 +790,8 @@ The `ThreadPoolBulkhead` call is fired first so it overlaps with the sequential 
 | **`FixedThreadPoolBulkhead` for account-validation-service** | account-validation has a 500ms latency; async submission to a dedicated thread pool prevents blocking worker threads |
 | **`@StepScope` on the writer** | Each partition needs its own writer instance pointing to its own output file. Making the writer step-scoped (not a singleton) prevents file contention between parallel partitions |
 | **`RangePartitioner`** | Divides the CSV by line number ranges, enabling each partition to open its own `FlatFileItemReader` with a specific offset and limit — no shared reader state |
+| **`JobOperator.stop()` for graceful stop** | Sets a stop flag in `BATCH_JOB_EXECUTION`; the running job checks it after each chunk commit and transitions to `STOPPING → STOPPED` without losing partially-processed data |
+| **`JobOperator.restart()` for resume** | Creates a new `JobExecution` that skips `COMPLETED` step executions and resumes incomplete ones from their last committed chunk offset, guaranteeing exactly-once processing |
+| **`allowStartIfComplete(true)` on workerStep** | Required for restart: without this flag, Spring Batch refuses to re-run a step that already completed, which would prevent partitions from being restarted after a stop |
 | **H2 in-memory DB** | Spring Batch requires a metadata schema. H2 provides it without any external infrastructure dependency for this demo |
 | **Nx monorepo** | Keeps all three services in one repository with unified build/test/serve commands while allowing independent deployments |
