@@ -30,13 +30,29 @@ import java.util.stream.Collectors;
  *   <li>Beneficiary bank-code — same bulkhead (separate permit).</li>
  *   <li>Transaction amount ≥ configured minimum for the transaction type — same bulkhead.</li>
  *   <li>Source + beneficiary account validity — via {@code AccountValidationClient} bulk endpoint,
- *       dispatched through the <b>FixedThreadPoolBulkhead</b> as a CompletableFuture.</li>
+ *       dispatched through the <b>ThreadPoolBulkhead</b> as a CompletableFuture.</li>
  * </ol>
  *
- * <p>Records that fail any validation are <em>not</em> filtered out; instead, {@link TransactionRecord#isValid()}
- * is set to {@code false} and {@link TransactionRecord#getValidationErrors()} contains a
- * comma-separated list of failure reasons.  This allows the writer to separate valid/invalid
- * output files.
+ * <h3>Performance &amp; Bulkhead semantics</h3>
+ * <p><b>SemaphoreBulkhead</b> is designed to be called on the <em>current</em> thread — it
+ * acquires a permit, executes the call inline, then releases the permit.  Wrapping it in
+ * {@code CompletableFuture.supplyAsync()} would submit hundreds of permit-acquisitions
+ * simultaneously (one per chunk record × 3 calls), instantly exhausting the 20-permit
+ * pool and causing {@code BulkheadFullException} under real load.
+ *
+ * <p>Instead, steps 1–3 execute <em>sequentially on the calling virtual-worker thread</em>
+ * (each holding a semaphore permit only for the duration of its own HTTP call), while
+ * step 4 is submitted to the {@code ThreadPoolBulkhead} <em>before</em> step 1 begins.
+ * Because virtual threads are cheap and non-blocking, the account-validation HTTP call
+ * (step 4) overlaps with the three sequential config-service calls (steps 1–3).
+ * Total wall-clock cost ≈ {@code max(3 × config_latency_sequential, account_latency)},
+ * e.g. with 500 ms mock latency: {@code max(3 × 500 ms, 500 ms) = 1 500 ms} — still
+ * substantially better than the fully-sequential {@code 3 × 500 + 500 = 2 000 ms}.
+ *
+ * <p>Records that fail any validation are <em>not</em> filtered out; instead,
+ * {@link TransactionRecord#isValid()} is set to {@code false} and
+ * {@link TransactionRecord#getValidationErrors()} contains a comma-separated list of
+ * failure reasons.  This allows the writer to separate valid/invalid output files.
  */
 @Slf4j
 @Component
@@ -45,6 +61,8 @@ public class TransactionItemProcessor implements ItemProcessor<TransactionRecord
     private final ConfigServiceClient configServiceClient;
     private final AccountValidationClient accountValidationClient;
     private final Bulkhead configServiceBulkhead;
+    /** Declared for demo purposes — shows the bulkhead bean is wired; not used in the hot path. */
+    @SuppressWarnings("unused")
     private final Bulkhead accountValidationBulkhead;
     private final ThreadPoolBulkhead accountValidationThreadPoolBulkhead;
 
@@ -65,17 +83,62 @@ public class TransactionItemProcessor implements ItemProcessor<TransactionRecord
     public TransactionRecord process(TransactionRecord record) {
         List<String> errors = new ArrayList<>();
 
-        // ── Step 1: Source bank-code validation (SemaphoreBulkhead) ──────────
-        validateBankCode(record.getSourceBankCode(), "sourceBankCode", errors);
+        // ── Step 4 submitted FIRST: account-validation via ThreadPoolBulkhead ─
+        // Dispatched immediately so it runs concurrently while this virtual-worker
+        // thread performs the sequential config-service calls below.
+        List<AccountValidationRequest> requests = List.of(
+                new AccountValidationRequest(record.getSourceAccount(), record.getSourceBankCode()),
+                new AccountValidationRequest(record.getBeneficiaryAccount(), record.getBeneficiaryBankCode())
+        );
 
-        // ── Step 2: Beneficiary bank-code validation (SemaphoreBulkhead) ─────
-        validateBankCode(record.getBeneficiaryBankCode(), "beneficiaryBankCode", errors);
+        Supplier<List<AccountValidationResponse>> accountSupplier =
+                () -> accountValidationClient.validateBulk(requests);
 
-        // ── Step 3: Amount validation (SemaphoreBulkhead) ────────────────────
-        validateAmount(record, errors);
+        @SuppressWarnings("unchecked")
+        CompletableFuture<List<AccountValidationResponse>> accountFuture =
+                (CompletableFuture<List<AccountValidationResponse>>)
+                        (CompletableFuture<?>) accountValidationThreadPoolBulkhead.executeSupplier(accountSupplier);
 
-        // ── Step 4: Account validation via FixedThreadPoolBulkhead (async) ───
-        validateAccounts(record, errors);
+        // ── Steps 1–3: config-service calls via SemaphoreBulkhead ────────────
+        // SemaphoreBulkhead acquires a permit, runs the call inline on this
+        // (virtual) thread, then releases it — sequential, but overlapping with
+        // the account-validation future already in flight above.
+        try {
+            // Step 1 — source bank-code
+            if (!Bulkhead.decorateSupplier(configServiceBulkhead,
+                    () -> configServiceClient.isBankCodeValid(record.getSourceBankCode())).get()) {
+                errors.add("sourceBankCode '" + record.getSourceBankCode() + "' is not a recognised bank code");
+            }
+            // Step 2 — beneficiary bank-code
+            if (!Bulkhead.decorateSupplier(configServiceBulkhead,
+                    () -> configServiceClient.isBankCodeValid(record.getBeneficiaryBankCode())).get()) {
+                errors.add("beneficiaryBankCode '" + record.getBeneficiaryBankCode() + "' is not a recognised bank code");
+            }
+            // Step 3 — amount minimum
+            if (!Bulkhead.decorateSupplier(configServiceBulkhead,
+                    () -> configServiceClient.isAmountValid(
+                            record.getTransactionType(), record.getAmount())).get()) {
+                errors.add("amount " + record.getAmount() + " is below the minimum for " + record.getTransactionType());
+            }
+            // Step 4 — join account-validation future (already running in parallel)
+            collectAccountErrors(accountFuture.get(), record, errors);
+
+        } catch (BulkheadFullException e) {
+            log.warn("Bulkhead full while processing ref {}: {}", record.getReferenceId(), e.getMessage());
+            errors.add("validation could not be performed (bulkhead full)");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            errors.add("validation interrupted");
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof BulkheadFullException) {
+                log.warn("Bulkhead full for ref {}: {}", record.getReferenceId(), cause.getMessage());
+                errors.add("validation could not be performed (bulkhead full)");
+            } else {
+                log.warn("Validation future failed for ref {}: {}", record.getReferenceId(), cause.getMessage());
+                errors.add("validation failed: " + cause.getMessage());
+            }
+        }
 
         if (!errors.isEmpty()) {
             record.setValid(false);
@@ -90,84 +153,28 @@ public class TransactionItemProcessor implements ItemProcessor<TransactionRecord
 
     // ─── private helpers ─────────────────────────────────────────────────────
 
-    private void validateBankCode(String bankCode, String fieldName, List<String> errors) {
-        try {
-            boolean valid = Bulkhead.decorateSupplier(configServiceBulkhead,
-                    () -> configServiceClient.isBankCodeValid(bankCode)).get();
-            if (!valid) {
-                errors.add(fieldName + " '" + bankCode + "' is not a recognised bank code");
-            }
-        } catch (BulkheadFullException e) {
-            log.warn("ConfigService bulkhead full while validating {}: {}", fieldName, e.getMessage());
-            errors.add(fieldName + " could not be validated (bulkhead full)");
+    private void collectAccountErrors(List<AccountValidationResponse> results,
+                                      TransactionRecord record, List<String> errors) {
+        if (results == null || results.isEmpty()) {
+            errors.add("account validation service returned no results");
+            return;
         }
-    }
+        Map<String, AccountValidationResponse> byAccount = results.stream()
+                .collect(Collectors.toMap(
+                        AccountValidationResponse::accountNumber,
+                        r -> r,
+                        (a, b) -> a));
 
-    private void validateAmount(TransactionRecord record, List<String> errors) {
-        try {
-            boolean valid = Bulkhead.decorateSupplier(configServiceBulkhead,
-                    () -> configServiceClient.isAmountValid(
-                            record.getTransactionType(), record.getAmount())).get();
-            if (!valid) {
-                errors.add("amount " + record.getAmount() + " is below the minimum for "
-                        + record.getTransactionType());
-            }
-        } catch (BulkheadFullException e) {
-            log.warn("ConfigService bulkhead full while validating amount: {}", e.getMessage());
-            errors.add("amount could not be validated (bulkhead full)");
+        AccountValidationResponse srcResult = byAccount.get(record.getSourceAccount());
+        if (srcResult == null || Boolean.FALSE.equals(srcResult.valid())) {
+            String reason = (srcResult != null) ? srcResult.status() : "NOT_FOUND";
+            errors.add("sourceAccount '" + record.getSourceAccount() + "' is invalid (" + reason + ")");
         }
-    }
 
-    private void validateAccounts(TransactionRecord record, List<String> errors) {
-        List<AccountValidationRequest> requests = List.of(
-                new AccountValidationRequest(record.getSourceAccount(), record.getSourceBankCode()),
-                new AccountValidationRequest(record.getBeneficiaryAccount(), record.getBeneficiaryBankCode())
-        );
-
-        Supplier<List<AccountValidationResponse>> supplier =
-                () -> accountValidationClient.validateBulk(requests);
-
-        try {
-            // Dispatch through FixedThreadPoolBulkhead → returns CompletionStage, cast to CompletableFuture
-            @SuppressWarnings("unchecked")
-            CompletableFuture<List<AccountValidationResponse>> future =
-                    (CompletableFuture<List<AccountValidationResponse>>)
-                            (CompletableFuture<?>) accountValidationThreadPoolBulkhead.executeSupplier(supplier);
-
-            List<AccountValidationResponse> results = future.get(); // virtual thread: non-blocking wait
-
-            // Build a quick lookup by accountNumber
-            Map<String, AccountValidationResponse> resultMap = results.stream()
-                    .collect(Collectors.toMap(
-                            AccountValidationResponse::accountNumber,
-                            r -> r,
-                            (a, b) -> a));
-
-            // Source account
-            AccountValidationResponse srcResult = resultMap.get(record.getSourceAccount());
-            if (srcResult == null || Boolean.FALSE.equals(srcResult.valid())) {
-                String reason = (srcResult != null) ? srcResult.status() : "NOT_FOUND";
-                errors.add("sourceAccount '" + record.getSourceAccount() + "' is invalid (" + reason + ")");
-            }
-
-            // Beneficiary account
-            AccountValidationResponse beneResult = resultMap.get(record.getBeneficiaryAccount());
-            if (beneResult == null || Boolean.FALSE.equals(beneResult.valid())) {
-                String reason = (beneResult != null) ? beneResult.status() : "NOT_FOUND";
-                errors.add("beneficiaryAccount '" + record.getBeneficiaryAccount() + "' is invalid (" + reason + ")");
-            }
-
-        } catch (BulkheadFullException e) {
-            log.warn("AccountValidation ThreadPoolBulkhead full for ref {}: {}",
-                    record.getReferenceId(), e.getMessage());
-            errors.add("account validation could not be performed (thread-pool bulkhead full)");
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            errors.add("account validation interrupted");
-        } catch (ExecutionException e) {
-            log.warn("Account validation future failed for ref {}: {}",
-                    record.getReferenceId(), e.getCause().getMessage());
-            errors.add("account validation failed: " + e.getCause().getMessage());
+        AccountValidationResponse beneResult = byAccount.get(record.getBeneficiaryAccount());
+        if (beneResult == null || Boolean.FALSE.equals(beneResult.valid())) {
+            String reason = (beneResult != null) ? beneResult.status() : "NOT_FOUND";
+            errors.add("beneficiaryAccount '" + record.getBeneficiaryAccount() + "' is invalid (" + reason + ")");
         }
     }
 }

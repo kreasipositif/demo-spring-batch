@@ -6,6 +6,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
+import java.math.BigDecimal;
+
 /**
  * REST client for the config-service (port 8081).
  *
@@ -14,6 +16,10 @@ import org.springframework.web.client.RestClientException;
  *   <li>Validate a bank code against the known list.</li>
  *   <li>Validate that a given amount meets the minimum for a transaction type.</li>
  * </ul>
+ *
+ * <p>Calls are intentionally kept simple and stateless — each invocation makes a
+ * fresh HTTP request.  Rate-limiting / concurrency control is applied upstream by
+ * the {@code SemaphoreBulkhead} in {@link com.kreasipositif.batchprocessor.batch.TransactionItemProcessor}.
  */
 @Slf4j
 @Component
@@ -54,7 +60,7 @@ public class ConfigServiceClient {
      *
      * @return {@code true} if the amount satisfies the configured minimum for the type
      */
-    public boolean isAmountValid(String transactionType, java.math.BigDecimal amount) {
+    public boolean isAmountValid(String transactionType, BigDecimal amount) {
         try {
             AmountValidationResponse response = restClient.get()
                     .uri(uriBuilder -> uriBuilder
@@ -75,6 +81,6 @@ public class ConfigServiceClient {
 
     public record BankCodeValidationResponse(String code, Boolean valid, String message) {}
 
-    public record AmountValidationResponse(String transactionType, java.math.BigDecimal amount,
+    public record AmountValidationResponse(String transactionType, BigDecimal amount,
                                            Boolean valid, String message) {}
 }

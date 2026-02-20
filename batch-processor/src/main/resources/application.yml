@@ -21,6 +21,20 @@ spring:
     driver-class-name: org.h2.Driver
     username: sa
     password:
+    hikari:
+      # Each of the 10 partition workers holds 1 connection open for the duration of
+      # its chunk transaction. Add headroom for the manager step, the JobRepository
+      # writes between chunks, and concurrent REST /status queries.
+      #
+      # Formula:  grid-size (10) + manager (1) + JobRepository overhead (~2) + REST (~3)  = 20
+      maximum-pool-size: 30
+      minimum-idle: 5
+      # How long a /status REST call will wait for a free connection before throwing.
+      # 5 s is generous enough to survive a brief burst but short enough to surface
+      # pool exhaustion quickly rather than hanging the HTTP thread for 30 s.
+      connection-timeout: 5000
+      # Reclaim connections that a partition worker forgets to close (safety net).
+      leak-detection-threshold: 60000
   h2:
     console:
       enabled: true

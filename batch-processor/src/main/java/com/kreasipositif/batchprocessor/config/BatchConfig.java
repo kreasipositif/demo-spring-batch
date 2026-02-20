@@ -11,6 +11,8 @@ import org.springframework.batch.core.Job;
 import org.springframework.batch.core.Step;
 import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.core.job.builder.JobBuilder;
+import org.springframework.batch.core.launch.JobLauncher;
+import org.springframework.batch.core.launch.support.TaskExecutorJobLauncher;
 import org.springframework.batch.core.partition.PartitionHandler;
 import org.springframework.batch.core.partition.support.TaskExecutorPartitionHandler;
 import org.springframework.batch.core.repository.JobRepository;
@@ -20,6 +22,7 @@ import org.springframework.batch.item.file.builder.FlatFileItemReaderBuilder;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.core.task.TaskExecutor;
@@ -81,6 +84,25 @@ public class BatchConfig {
         return new JobBuilder("transactionValidationJob", jobRepository)
                 .start(managerStep())
                 .build();
+    }
+
+    // ─── Async JobLauncher ────────────────────────────────────────────────────
+
+    /**
+     * An async {@link JobLauncher} backed by a virtual-thread executor.
+     *
+     * <p>Using this launcher means {@code jobLauncher.run(...)} returns immediately
+     * with {@code BatchStatus.STARTING} instead of blocking until the job finishes.
+     * Callers can then poll {@code GET /api/v1/batch/status/{id}} to track progress.
+     */
+    @Bean("asyncJobLauncher")
+    @Primary
+    public JobLauncher asyncJobLauncher() throws Exception {
+        TaskExecutorJobLauncher launcher = new TaskExecutorJobLauncher();
+        launcher.setJobRepository(jobRepository);
+        launcher.setTaskExecutor(new VirtualThreadTaskExecutor("job-launcher-"));
+        launcher.afterPropertiesSet();
+        return launcher;
     }
 
     // ─── Manager Step (partitioned) ──────────────────────────────────────────

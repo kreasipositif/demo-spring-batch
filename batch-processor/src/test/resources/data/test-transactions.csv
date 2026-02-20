@@ -1,6 +1,14 @@
 Reference ID,Source Account,Source Account Name,Source Bank Code,Beneficiary Account,Beneficiary Account Name,Beneficiary Bank Code,Currency,Amount,Transaction Type,Note
-TRX-T001,1111111111,Alice Tan,BCA,2222222222,Bob Lee,MANDIRI,IDR,500000,DOMESTIC_TRANSFER,Test transfer 1
-TRX-T002,3333333333,Carol Kim,BNI,4444444444,David Wong,BCA,IDR,750000,DOMESTIC_TRANSFER,Test transfer 2
-TRX-T003,5555555555,Eve Santos,MANDIRI,6666666666,Frank Liu,CIMB,IDR,1000000,DOMESTIC_TRANSFER,Test transfer 3
-TRX-T004,UNKNOWN_ACC,Ghost User,INVALID_BANK,9999999999,Target User,BCA,IDR,200000,DOMESTIC_TRANSFER,Should fail - invalid bank code and account
-TRX-T005,7777777777,Valid User,BCA,UNKNOWN_ACC,Missing User,MANDIRI,IDR,300000,DOMESTIC_TRANSFER,Should fail - invalid beneficiary account
+TRX-T001,1234567890,Budi Santoso,BCA,0987654321,Siti Rahayu,BNI,IDR,500000,TRANSFER,Valid - both accounts ACTIVE
+TRX-T002,1122334455,Ahmad Fauzi,BRI,5544332211,Dewi Lestari,MANDIRI,IDR,250000,TRANSFER,Valid - both accounts ACTIVE
+TRX-T003,9900112233,Rina Kusuma,DANAMON,7788990011,Yuni Astuti,BTN,IDR,10000,PAYMENT,Valid - amount equals minimum for PAYMENT
+TRX-T004,2233445566,Fajar Nugroho,BSI,4455667788,Indah Permata,OCBC,IDR,100000,TOPUP,Valid - both accounts ACTIVE
+TRX-T005,1357924680,Wahyu Prasetyo,BCA,1111222233,Doni Kurniawan,MANDIRI,IDR,750000,TRANSFER,Valid - both accounts ACTIVE
+TRX-T006,1234567890,Budi Santoso,BCA,6677889900,Rudi Hermawan,CIMB,IDR,200000,TRANSFER,Invalid - beneficiary account is INACTIVE
+TRX-T007,4444555566,Lina Marlina,BNI,0987654321,Siti Rahayu,BNI,IDR,500000,TRANSFER,Invalid - source account is INACTIVE
+TRX-T008,1234567890,Budi Santoso,BCA,3344556677,Hendra Gunawan,PERMATA,IDR,300000,TRANSFER,Invalid - beneficiary account is BLOCKED
+TRX-T009,1234567890,Budi Santoso,XENDIT,0987654321,Siti Rahayu,BNI,IDR,500000,TRANSFER,Invalid - source bank code XENDIT not recognised
+TRX-T010,1234567890,Budi Santoso,BCA,0987654321,Siti Rahayu,GOPAY,IDR,500000,TRANSFER,Invalid - beneficiary bank code GOPAY not recognised
+TRX-T011,1234567890,Budi Santoso,BCA,0987654321,Siti Rahayu,BNI,IDR,5000,TRANSFER,Invalid - amount 5000 below TRANSFER minimum of 10000
+TRX-T012,9999999999,Unknown Person,BRI,1122334455,Ahmad Fauzi,BRI,IDR,100000,PAYMENT,Invalid - source account not found
+TRX-T013,1357924680,Wahyu Prasetyo,BCA,8888888888,Ghost Account,MANDIRI,IDR,50000,PAYMENT,Invalid - beneficiary account not found
